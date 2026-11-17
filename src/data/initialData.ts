@@ -3449,10 +3449,10 @@ export const INITIAL_SCHOOLS: TasmikSchoolRecord[] = [
 export const INITIAL_OFFICERS: Officer[] = [
   {
     id: 'off-01',
-    name: 'Tuan Hj. Mojuntin bin Ebin',
+    name: 'Ustazah Anicca @ Anisah binti Albe',
     designation: 'Pegawai Pendidikan Daerah Penampang',
     roleDescription: 'Penaung Program j-QAF & Tasmik Daerah Penampang. Menerajui hala tuju dan kualiti pencapaian Pendidikan Islam daerah.',
-    grade: 'DG54',
+    grade: 'DG48',
     sector: 'Pejabat Pendidikan Daerah Penampang',
     phone: '088-712890',
     email: 'ppd.penampang@moe.gov.my',

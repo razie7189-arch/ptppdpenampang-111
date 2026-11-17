@@ -543,19 +543,23 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
                   className="flex items-center gap-3 p-2.5 rounded-2xl hover:bg-slate-50 transition-colors"
                 >
                   <img
-                    src={off.avatarUrl}
-                    alt={off.name}
+                    src={off.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'}
+                    alt={off.name || off.designation}
                     className="w-10 h-10 rounded-full object-cover border border-slate-200"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src =
+                        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80';
+                    }}
                   />
                   <div className="min-w-0 flex-1">
                     <h4 className="text-xs font-bold text-slate-900 truncate">
-                      {off.name}
+                      {off.name?.trim() || off.designation}
                     </h4>
                     <p className="text-[11px] text-orange-600 font-medium truncate">
                       {off.designation}
                     </p>
                     <p className="text-[10px] text-slate-400 truncate">
-                      Gred {off.grade} • {off.phone}
+                      Gred {off.grade || '-'} • {off.phone || '-'}
                     </p>
                   </div>
                 </div>

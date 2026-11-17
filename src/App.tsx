@@ -115,6 +115,14 @@ export default function App() {
     loadAllData();
   }, []);
 
+  useEffect(() => {
+    if (!supabaseConfig.isConnected) return;
+    const unsubscribe = supabaseService.subscribeToOfficers((freshOfficers) => {
+      setOfficers(freshOfficers);
+    });
+    return () => unsubscribe();
+  }, [supabaseConfig.isConnected]);
+
   // Compute District Summary
   const summary: TasmikDistrictSummary = supabaseService.calculateDistrictSummary(schools);
 
@@ -256,24 +264,31 @@ export default function App() {
     setSekolahFokusList((prev) => prev.filter((s) => s.id !== id));
   };
 
-  const handleSaveOfficer = async (officer: Officer) => {
-    const saved = await supabaseService.saveOfficer(officer);
+  const handleSaveOfficer = async (officer: Officer): Promise<{ syncedToCloud: boolean; error?: string }> => {
     setOfficers((prev) => {
-      const idx = prev.findIndex((o) => o.id === saved.id);
+      const idx = prev.findIndex((o) => o.id === officer.id);
       let next: Officer[];
       if (idx >= 0) {
         next = [...prev];
-        next[idx] = saved;
+        next[idx] = officer;
       } else {
-        next = [...prev, saved];
+        next = [...prev, officer];
       }
-      return next.sort((a, b) => a.order - b.order);
+      return next.sort((a, b) => (a.order || 0) - (b.order || 0));
     });
+    const res = await supabaseService.saveOfficer(officer);
+    return { syncedToCloud: res.syncedToCloud, error: res.error };
+  };
+
+  const handleSaveOfficersBatch = async (updatedOfficers: Officer[]): Promise<boolean> => {
+    const sorted = [...updatedOfficers].sort((a, b) => (a.order || 0) - (b.order || 0));
+    setOfficers(sorted);
+    return supabaseService.saveOfficersBatch(sorted);
   };
 
   const handleDeleteOfficer = async (id: string) => {
-    await supabaseService.deleteOfficer(id);
     setOfficers((prev) => prev.filter((o) => o.id !== id));
+    await supabaseService.deleteOfficer(id);
   };
 
   const handleSaveTakwim = async (event: TakwimEvent) => {
@@ -426,6 +441,7 @@ export default function App() {
               <PegawaiPage
                 officers={officers}
                 onSaveOfficer={handleSaveOfficer}
+                onSaveOfficersBatch={handleSaveOfficersBatch}
                 onDeleteOfficer={handleDeleteOfficer}
               />
             )}

@@ -115,13 +115,55 @@ export default function App() {
     loadAllData();
   }, []);
 
+  const refreshOfficers = useCallback(async () => {
+    try {
+      const freshOfficers = await supabaseService.getOfficers();
+      setOfficers((prev) => {
+        if (JSON.stringify(prev) === JSON.stringify(freshOfficers)) {
+          return prev;
+        }
+        return freshOfficers;
+      });
+    } catch (err) {
+      console.warn('Auto-refresh officers failed:', err);
+    }
+  }, []);
+
   useEffect(() => {
     if (!supabaseConfig.isConnected) return;
+
     const unsubscribe = supabaseService.subscribeToOfficers((freshOfficers) => {
-      setOfficers(freshOfficers);
+      setOfficers((prev) =>
+        JSON.stringify(prev) === JSON.stringify(freshOfficers) ? prev : freshOfficers
+      );
     });
-    return () => unsubscribe();
-  }, [supabaseConfig.isConnected]);
+
+    const handleFocusOrVisible = () => {
+      if (document.visibilityState === 'visible') {
+        refreshOfficers();
+      }
+    };
+
+    window.addEventListener('focus', handleFocusOrVisible);
+    document.addEventListener('visibilitychange', handleFocusOrVisible);
+
+    // Segerak latar pantas (setiap 6 saat) ketika di paparan Dashboard / Barisan Pegawai
+    const pollTimer = setInterval(() => {
+      if (
+        document.visibilityState === 'visible' &&
+        (currentPage === 'pegawai' || currentPage === 'dashboard')
+      ) {
+        refreshOfficers();
+      }
+    }, 6000);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('focus', handleFocusOrVisible);
+      document.removeEventListener('visibilitychange', handleFocusOrVisible);
+      clearInterval(pollTimer);
+    };
+  }, [supabaseConfig.isConnected, currentPage, refreshOfficers]);
 
   // Compute District Summary
   const summary: TasmikDistrictSummary = supabaseService.calculateDistrictSummary(schools);
@@ -443,6 +485,8 @@ export default function App() {
                 onSaveOfficer={handleSaveOfficer}
                 onSaveOfficersBatch={handleSaveOfficersBatch}
                 onDeleteOfficer={handleDeleteOfficer}
+                onRefreshOfficers={refreshOfficers}
+                isSupabaseConnected={supabaseConfig.isConnected}
               />
             )}
 

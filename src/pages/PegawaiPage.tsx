@@ -15,7 +15,9 @@ import {
   Zap,
   CheckCircle2,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  RefreshCw,
+  Database
 } from 'lucide-react';
 
 interface PegawaiPageProps {
@@ -23,6 +25,8 @@ interface PegawaiPageProps {
   onSaveOfficer: (officer: Officer) => Promise<{ syncedToCloud: boolean; error?: string } | void>;
   onSaveOfficersBatch?: (officers: Officer[]) => Promise<boolean>;
   onDeleteOfficer: (id: string) => Promise<void>;
+  onRefreshOfficers?: () => Promise<void>;
+  isSupabaseConnected?: boolean;
 }
 
 const FALLBACK_AVATAR =
@@ -32,7 +36,9 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
   officers,
   onSaveOfficer,
   onSaveOfficersBatch,
-  onDeleteOfficer
+  onDeleteOfficer,
+  onRefreshOfficers,
+  isSupabaseConnected = false
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isNewOfficer, setIsNewOfficer] = useState(false);
@@ -40,9 +46,12 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [liveModalSync, setLiveModalSync] = useState(true);
 
-  // Instant inline quick-edit mode on cards
+  // Instant inline quick-edit mode on cards with stable controlled drafts
   const [isQuickEditMode, setIsQuickEditMode] = useState(false);
+  const [quickDrafts, setQuickDrafts] = useState<Record<string, Officer>>({});
+  const [activeEditId, setActiveEditId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
 
   // Live sync status indicator
   const [syncState, setSyncState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -57,6 +66,22 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
       if (statusClearTimer.current) clearTimeout(statusClearTimer.current);
     };
   }, []);
+
+  // Sync incoming officers (from Supabase / Realtime / Focus refresh) into quickDrafts
+  // while protecting the card currently focused by the user
+  useEffect(() => {
+    setQuickDrafts((prev) => {
+      const next: Record<string, Officer> = {};
+      officers.forEach((off) => {
+        if (activeEditId === off.id && prev[off.id]) {
+          next[off.id] = prev[off.id];
+        } else {
+          next[off.id] = off;
+        }
+      });
+      return next;
+    });
+  }, [officers, activeEditId]);
 
   const showSyncFeedback = (state: 'saving' | 'saved' | 'error', message: string) => {
     setSyncState(state);
@@ -80,14 +105,13 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
       showSyncFeedback('saving', 'Menyimpan perubahan serta-merta...');
       const res = await onSaveOfficer(updatedOfficer);
       if (res && res.error) {
-        showSyncFeedback('error', `Disimpan secara lokal (Supabase: ${res.error})`);
+        showSyncFeedback('error', `Disimpan lokal (Supabase: ${res.error})`);
       } else {
         showSyncFeedback('saved', 'Disimpan serta-merta ke Portal & Supabase');
       }
       return;
     }
 
-    // Immediate optimistic React state update first, debounce only cloud upsert slightly if typing fast
     showSyncFeedback('saving', 'Mengemas kini serta-merta...');
     debounceTimers.current[key] = setTimeout(async () => {
       const res = await onSaveOfficer(updatedOfficer);
@@ -97,6 +121,15 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
         showSyncFeedback('saved', 'Disimpan serta-merta ke Portal & Supabase');
       }
     }, 300);
+  };
+
+  const handleManualSyncFromSupabase = async () => {
+    if (!onRefreshOfficers || isManualRefreshing) return;
+    setIsManualRefreshing(true);
+    showSyncFeedback('saving', 'Menyegerakkan direktori daripada Supabase...');
+    await onRefreshOfficers();
+    setIsManualRefreshing(false);
+    showSyncFeedback('saved', 'Direktori dikemas kini daripada Supabase');
   };
 
   const handleOpenAddModal = () => {
@@ -143,8 +176,15 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
     setEditingOfficer(null);
   };
 
-  const handleQuickFieldChange = (officer: Officer, patch: Partial<Officer>, immediate = false) => {
-    const updated = { ...officer, ...patch };
+  const handleQuickDraftChange = (
+    officerId: string,
+    patch: Partial<Officer>,
+    immediate = false
+  ) => {
+    const base = quickDrafts[officerId] || officers.find((o) => o.id === officerId);
+    if (!base) return;
+    const updated = { ...base, ...patch };
+    setQuickDrafts((prev) => ({ ...prev, [officerId]: updated }));
     commitInstantOfficer(updated, immediate);
   };
 
@@ -193,20 +233,39 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
       <div className="apple-card rounded-3xl p-6 sm:p-8">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="p-2 rounded-xl bg-orange-100 text-orange-600">
                 <Users className="w-5 h-5" />
               </span>
               <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900">
                 Barisan Pegawai Unit Pendidikan Islam PPD Penampang
               </h1>
+              {isSupabaseConnected && (
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-bold">
+                  <Database className="w-3 h-3" />
+                  <span>Live Supabase: upi_officers</span>
+                </span>
+              )}
             </div>
             <p className="text-xs sm:text-sm text-slate-500">
-              Direktori kepimpinan, carta organisasi, dan senarai pegawai. Sebarang suntingan dikemas kini serta-merta ke Portal &amp; Supabase.
+              Direktori kepimpinan, carta organisasi, dan senarai pegawai. Sebarang suntingan di portal atau Table Editor Supabase dikemas kini serta-merta.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-auto">
+          <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
+            {isSupabaseConnected && onRefreshOfficers && (
+              <button
+                type="button"
+                onClick={handleManualSyncFromSupabase}
+                disabled={isManualRefreshing}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer disabled:opacity-60"
+                title="Tarik data terkini daripada jadual upi_officers Supabase"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isManualRefreshing ? 'animate-spin' : ''}`} />
+                <span>Segerak Supabase</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => setIsQuickEditMode((prev) => !prev)}
@@ -233,14 +292,14 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
         </div>
 
         {/* Status Bar Serta-Merta */}
-        {(syncState !== 'idle' || isQuickEditMode) && (
+        {(syncState !== 'idle' || isQuickEditMode || isSupabaseConnected) && (
           <div className="mt-4 pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
             <div className="flex items-center gap-2 text-slate-600">
               <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />
               <span>
                 {isQuickEditMode
                   ? 'Mod Sunting Serta-Merta aktif: Ubah terus mana-mana maklumat di kad — disimpan automatik tanpa perlu tekan butang lain.'
-                  : 'Tetapan kemas kini serta-merta aktif untuk suntingan dan susunan pegawai.'}
+                  : 'Auto-segerak aktif: Perubahan di jadual upi_officers Supabase atau di kad dikemas kini secara automatik.'}
               </span>
             </div>
 
@@ -267,6 +326,7 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
       {/* Leadership Directory Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {officers.map((officer, index) => {
+          const draft = quickDrafts[officer.id] || officer;
           const displayName = officer.name?.trim() || '(Nama belum diisi)';
           const displayEmail = officer.email?.trim() || '-';
 
@@ -289,12 +349,12 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
               ></div>
 
               {isQuickEditMode ? (
-                /* MODE SUNTING TERUS SERTA-MERTA */
+                /* MODE SUNTING TERUS SERTA-MERTA (Controlled & Stable Focus) */
                 <div className="space-y-3 text-xs">
                   <div className="flex items-center gap-3">
                     <img
-                      src={officer.avatarUrl || FALLBACK_AVATAR}
-                      alt={displayName}
+                      src={draft.avatarUrl || FALLBACK_AVATAR}
+                      alt={draft.name || displayName}
                       className="w-14 h-14 rounded-2xl object-cover border-2 border-slate-100 shrink-0"
                       onError={(e) => {
                         (e.target as HTMLImageElement).src = FALLBACK_AVATAR;
@@ -304,15 +364,14 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
                       <div className="flex items-center gap-2">
                         <input
                           type="text"
-                          defaultValue={officer.grade}
-                          key={`grade-${officer.id}-${officer.grade}`}
+                          value={draft.grade || ''}
+                          onFocus={() => setActiveEditId(officer.id)}
                           onBlur={(e) => {
-                            if (e.target.value !== officer.grade) {
-                              handleQuickFieldChange(officer, { grade: e.target.value }, true);
-                            }
+                            setActiveEditId(null);
+                            handleQuickDraftChange(officer.id, { grade: e.target.value }, true);
                           }}
                           onChange={(e) =>
-                            handleQuickFieldChange(officer, { grade: e.target.value }, false)
+                            handleQuickDraftChange(officer.id, { grade: e.target.value }, false)
                           }
                           placeholder="Gred (cth: DG48)"
                           className="w-24 px-2 py-1 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white font-bold text-orange-800 uppercase text-[11px]"
@@ -321,15 +380,14 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
                       </div>
                       <input
                         type="text"
-                        defaultValue={officer.name}
-                        key={`name-${officer.id}-${officer.name}`}
+                        value={draft.name || ''}
+                        onFocus={() => setActiveEditId(officer.id)}
                         onBlur={(e) => {
-                          if (e.target.value !== officer.name) {
-                            handleQuickFieldChange(officer, { name: e.target.value }, true);
-                          }
+                          setActiveEditId(null);
+                          handleQuickDraftChange(officer.id, { name: e.target.value }, true);
                         }}
                         onChange={(e) =>
-                          handleQuickFieldChange(officer, { name: e.target.value }, false)
+                          handleQuickDraftChange(officer.id, { name: e.target.value }, false)
                         }
                         placeholder="Nama Penuh Pegawai"
                         className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white font-bold text-slate-900"
@@ -343,15 +401,14 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
                     </label>
                     <input
                       type="text"
-                      defaultValue={officer.designation}
-                      key={`desig-${officer.id}-${officer.designation}`}
+                      value={draft.designation || ''}
+                      onFocus={() => setActiveEditId(officer.id)}
                       onBlur={(e) => {
-                        if (e.target.value !== officer.designation) {
-                          handleQuickFieldChange(officer, { designation: e.target.value }, true);
-                        }
+                        setActiveEditId(null);
+                        handleQuickDraftChange(officer.id, { designation: e.target.value }, true);
                       }}
                       onChange={(e) =>
-                        handleQuickFieldChange(officer, { designation: e.target.value }, false)
+                        handleQuickDraftChange(officer.id, { designation: e.target.value }, false)
                       }
                       placeholder="Jawatan Rasmi"
                       className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white font-semibold text-orange-700"
@@ -364,15 +421,22 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
                     </label>
                     <textarea
                       rows={2}
-                      defaultValue={officer.roleDescription}
-                      key={`role-${officer.id}-${officer.roleDescription}`}
+                      value={draft.roleDescription || ''}
+                      onFocus={() => setActiveEditId(officer.id)}
                       onBlur={(e) => {
-                        if (e.target.value !== officer.roleDescription) {
-                          handleQuickFieldChange(officer, { roleDescription: e.target.value }, true);
-                        }
+                        setActiveEditId(null);
+                        handleQuickDraftChange(
+                          officer.id,
+                          { roleDescription: e.target.value },
+                          true
+                        );
                       }}
                       onChange={(e) =>
-                        handleQuickFieldChange(officer, { roleDescription: e.target.value }, false)
+                        handleQuickDraftChange(
+                          officer.id,
+                          { roleDescription: e.target.value },
+                          false
+                        )
                       }
                       placeholder="Ringkasan bidang tugas..."
                       className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white text-slate-700"
@@ -386,15 +450,14 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
                       </label>
                       <input
                         type="text"
-                        defaultValue={officer.phone}
-                        key={`phone-${officer.id}-${officer.phone}`}
+                        value={draft.phone || ''}
+                        onFocus={() => setActiveEditId(officer.id)}
                         onBlur={(e) => {
-                          if (e.target.value !== officer.phone) {
-                            handleQuickFieldChange(officer, { phone: e.target.value }, true);
-                          }
+                          setActiveEditId(null);
+                          handleQuickDraftChange(officer.id, { phone: e.target.value }, true);
                         }}
                         onChange={(e) =>
-                          handleQuickFieldChange(officer, { phone: e.target.value }, false)
+                          handleQuickDraftChange(officer.id, { phone: e.target.value }, false)
                         }
                         placeholder="088-712890"
                         className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white font-mono"
@@ -406,15 +469,14 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
                       </label>
                       <input
                         type="email"
-                        defaultValue={officer.email}
-                        key={`email-${officer.id}-${officer.email}`}
+                        value={draft.email || ''}
+                        onFocus={() => setActiveEditId(officer.id)}
                         onBlur={(e) => {
-                          if (e.target.value !== officer.email) {
-                            handleQuickFieldChange(officer, { email: e.target.value }, true);
-                          }
+                          setActiveEditId(null);
+                          handleQuickDraftChange(officer.id, { email: e.target.value }, true);
                         }}
                         onChange={(e) =>
-                          handleQuickFieldChange(officer, { email: e.target.value }, false)
+                          handleQuickDraftChange(officer.id, { email: e.target.value }, false)
                         }
                         placeholder="nama@moe.gov.my"
                         className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white font-mono"
@@ -428,15 +490,14 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
                     </label>
                     <input
                       type="text"
-                      defaultValue={officer.sector}
-                      key={`sector-${officer.id}-${officer.sector}`}
+                      value={draft.sector || ''}
+                      onFocus={() => setActiveEditId(officer.id)}
                       onBlur={(e) => {
-                        if (e.target.value !== officer.sector) {
-                          handleQuickFieldChange(officer, { sector: e.target.value }, true);
-                        }
+                        setActiveEditId(null);
+                        handleQuickDraftChange(officer.id, { sector: e.target.value }, true);
                       }}
                       onChange={(e) =>
-                        handleQuickFieldChange(officer, { sector: e.target.value }, false)
+                        handleQuickDraftChange(officer.id, { sector: e.target.value }, false)
                       }
                       placeholder="Pejabat Pendidikan Daerah Penampang"
                       className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white text-slate-600"

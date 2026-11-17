@@ -311,6 +311,21 @@ class SupabaseService {
     return true;
   }
 
+  private normalizeOfficer(raw: Officer): Officer {
+    return {
+      id: raw.id,
+      name: raw.name ?? '',
+      designation: raw.designation ?? '',
+      roleDescription: raw.roleDescription ?? '',
+      grade: raw.grade ?? '',
+      sector: raw.sector ?? '',
+      phone: raw.phone ?? '',
+      email: raw.email ?? '',
+      avatarUrl: raw.avatarUrl ?? '',
+      order: Number(raw.order) || 1,
+    };
+  }
+
   // --- OFFICERS CRUD ---
   public async getOfficers(): Promise<Officer[]> {
     if (this.client) {
@@ -319,7 +334,9 @@ class SupabaseService {
           .from('upi_officers')
           .select('*');
         if (!error && data && data.length > 0) {
-          const sorted = (data as Officer[]).sort((a, b) => (a.order || 0) - (b.order || 0));
+          const sorted = (data as Officer[])
+            .map((o) => this.normalizeOfficer(o))
+            .sort((a, b) => (a.order || 0) - (b.order || 0));
           this.setLocal('officers', sorted);
           return sorted;
         }
@@ -328,38 +345,41 @@ class SupabaseService {
       }
     }
     this.ensureMasterVersionSync();
-    return this.getLocal<Officer[]>('officers', INITIAL_OFFICERS);
+    return this.getLocal<Officer[]>('officers', INITIAL_OFFICERS).map((o) =>
+      this.normalizeOfficer(o)
+    );
   }
 
   public async saveOfficer(officer: Officer): Promise<{ officer: Officer; syncedToCloud: boolean; error?: string }> {
+    const cleanOfficer = this.normalizeOfficer(officer);
     const localList = this.getLocal<Officer[]>('officers', INITIAL_OFFICERS);
-    const index = localList.findIndex(o => o.id === officer.id);
+    const index = localList.findIndex(o => o.id === cleanOfficer.id);
     let updated: Officer[];
 
     if (index >= 0) {
       updated = [...localList];
-      updated[index] = officer;
+      updated[index] = cleanOfficer;
     } else {
-      updated = [...localList, officer];
+      updated = [...localList, cleanOfficer];
     }
     updated.sort((a, b) => (a.order || 0) - (b.order || 0));
     this.setLocal('officers', updated);
 
     if (this.client) {
       try {
-        const { error } = await this.client.from('upi_officers').upsert(officer);
+        const { error } = await this.client.from('upi_officers').upsert(cleanOfficer);
         if (error) {
           console.warn('Supabase saveOfficer error:', error);
-          return { officer, syncedToCloud: false, error: error.message };
+          return { officer: cleanOfficer, syncedToCloud: false, error: error.message };
         }
-        return { officer, syncedToCloud: true };
+        return { officer: cleanOfficer, syncedToCloud: true };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.warn('Supabase saveOfficer error:', e);
-        return { officer, syncedToCloud: false, error: msg };
+        return { officer: cleanOfficer, syncedToCloud: false, error: msg };
       }
     }
-    return { officer, syncedToCloud: false };
+    return { officer: cleanOfficer, syncedToCloud: false };
   }
 
   public async saveOfficersBatch(officers: Officer[]): Promise<boolean> {
@@ -880,6 +900,31 @@ class SupabaseService {
         `  (${sqlStr(f.id)}, ${sqlStr(f.schoolName)}, ${sqlStr(f.schoolCode)}, ${sqlStr(f.fokusIsu)}, ${sqlStr(f.tindakanIntervensi)}, ${sqlStr(f.tarikhBimbingan)}, ${sqlStr(f.pegawaiBimbingan)}, ${sqlStr(f.statusTindakan)})`
     ).join(',\n');
 
+    const officerRowsSql = INITIAL_OFFICERS.map(
+      (o) =>
+        `  (${sqlStr(o.id)}, ${sqlStr(o.name)}, ${sqlStr(o.designation)}, ${sqlStr(o.roleDescription)}, ${sqlStr(o.grade)}, ${sqlStr(o.sector)}, ${sqlStr(o.phone)}, ${sqlStr(o.email)}, ${sqlStr(o.avatarUrl)}, ${o.order})`
+    ).join(',\n');
+
+    const takwimRowsSql = INITIAL_TAKWIM.map(
+      (t) =>
+        `  (${sqlStr(t.id)}, ${sqlStr(t.title)}, ${sqlStr(t.date)}, ${sqlStr(t.month)}, ${sqlStr(t.category)}, ${sqlStr(t.venue)}, ${sqlStr(t.targetAudience)}, ${sqlStr(t.status)}, ${sqlStr(t.coordinator)}, ${sqlStr(t.notes)})`
+    ).join(',\n');
+
+    const teacherRowsSql = INITIAL_TEACHERS.map(
+      (g) =>
+        `  (${sqlStr(g.id)}, ${sqlStr(g.name)}, ${sqlStr(g.icNumber)}, ${sqlStr(g.schoolName)}, ${sqlStr(g.grade)}, ${sqlStr(g.role)}, ${sqlStr(g.phone)}, ${sqlStr(g.email)}, ${sqlStr(g.status)})`
+    ).join(',\n');
+
+    const documentRowsSql = INITIAL_DOCUMENTS.map(
+      (d) =>
+        `  (${sqlStr(d.id)}, ${sqlStr(d.title)}, ${sqlStr(d.category)}, ${sqlStr(d.description)}, ${sqlStr(d.googleDriveEmbedUrl)}, ${sqlStr(d.downloadUrl)}, ${sqlStr(d.dateUpdated)}, ${sqlStr(d.fileSize)})`
+    ).join(',\n');
+
+    const moduleRowsSql = INITIAL_MODULES.map(
+      (m) =>
+        `  (${sqlStr(m.id)}, ${sqlStr(m.title)}, ${sqlStr(m.description)}, ${sqlStr(m.pageId)}, ${sqlStr(m.iconName)}, ${sqlStr(m.accentColor)}, ${sqlStr(m.badgeText)}, ${m.order}, ${m.isActive ? 'true' : 'false'})`
+    ).join(',\n');
+
     return `-- ========================================================
 -- SKRIP MIGRATION & SEED SUPABASE: PORTAL PELAPORAN TASMIK PENAMPANG
 -- Sektor Pendidikan Islam, Pejabat Pendidikan Daerah Penampang
@@ -1094,6 +1139,18 @@ CREATE INDEX IF NOT EXISTS idx_tasmik_school_code ON tasmik_records("schoolCode"
 CREATE INDEX IF NOT EXISTS idx_guru_school_name ON guru_tasmik("schoolName");
 CREATE INDEX IF NOT EXISTS idx_fokus_school_code ON jqaf_sekolah_fokus("schoolCode");
 
+-- AKTIFKAN REALTIME SERTA-MERTA UNTUK BARISAN PEGAWAI (upi_officers)
+ALTER TABLE upi_officers REPLICA IDENTITY FULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'upi_officers'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE upi_officers;
+  END IF;
+END $$;
+
 -- ========================================================
 -- PEMBERSIHAN REKOD LAMA & SEED / UPSERT DATA RASMI 2026
 -- ========================================================
@@ -1206,6 +1263,41 @@ ON CONFLICT (id) DO UPDATE SET
   "tarikhBimbingan" = EXCLUDED."tarikhBimbingan",
   "pegawaiBimbingan" = EXCLUDED."pegawaiBimbingan",
   "statusTindakan" = EXCLUDED."statusTindakan";
+
+-- Barisan Pegawai UPI PPD Penampang (ON CONFLICT DO NOTHING agar suntingan semasa tidak tertimpa)
+INSERT INTO upi_officers (
+  id, name, designation, "roleDescription", grade, sector, phone, email, "avatarUrl", "order"
+) VALUES
+${officerRowsSql}
+ON CONFLICT (id) DO NOTHING;
+
+-- Takwim Unit Pendidikan Islam
+INSERT INTO upi_takwim (
+  id, title, date, month, category, venue, "targetAudience", status, coordinator, notes
+) VALUES
+${takwimRowsSql}
+ON CONFLICT (id) DO NOTHING;
+
+-- Senarai Guru Tasmik & GPI
+INSERT INTO guru_tasmik (
+  id, name, "icNumber", "schoolName", grade, role, phone, email, status
+) VALUES
+${teacherRowsSql}
+ON CONFLICT (id) DO NOTHING;
+
+-- Dokumen PDF & Buku Panduan
+INSERT INTO tasmik_documents (
+  id, title, category, description, "googleDriveEmbedUrl", "downloadUrl", "dateUpdated", "fileSize"
+) VALUES
+${documentRowsSql}
+ON CONFLICT (id) DO NOTHING;
+
+-- Modul Dashboard Dinamik
+INSERT INTO dashboard_modules (
+  id, title, description, "pageId", "iconName", "accentColor", "badgeText", "order", "isActive"
+) VALUES
+${moduleRowsSql}
+ON CONFLICT (id) DO NOTHING;
 `;
   }
 

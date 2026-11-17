@@ -24,9 +24,11 @@ interface PegawaiPageProps {
   officers: Officer[];
   onSaveOfficer: (officer: Officer) => Promise<{ syncedToCloud: boolean; error?: string } | void>;
   onSaveOfficersBatch?: (officers: Officer[]) => Promise<boolean>;
-  onDeleteOfficer: (id: string) => Promise<void>;
+  onDeleteOfficer: (id: string) => Promise<{ syncedToCloud: boolean; error?: string } | void>;
   onRefreshOfficers?: () => Promise<void>;
   isSupabaseConnected?: boolean;
+  realtimeStatus?: string;
+  lastSyncedAt?: string;
 }
 
 const FALLBACK_AVATAR =
@@ -38,7 +40,9 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
   onSaveOfficersBatch,
   onDeleteOfficer,
   onRefreshOfficers,
-  isSupabaseConnected = false
+  isSupabaseConnected = false,
+  realtimeStatus = 'CONNECTING',
+  lastSyncedAt = ''
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isNewOfficer, setIsNewOfficer] = useState(false);
@@ -222,9 +226,13 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
 
   const handleConfirmDelete = async (id: string) => {
     setConfirmDeleteId(null);
-    showSyncFeedback('saving', 'Memadam profil pegawai...');
-    await onDeleteOfficer(id);
-    showSyncFeedback('saved', 'Profil pegawai dipadam serta-merta');
+    showSyncFeedback('saving', 'Memadam profil pegawai di Supabase...');
+    const res = await onDeleteOfficer(id);
+    if (res && res.error) {
+      showSyncFeedback('error', `Dipadam lokal (Ralat Supabase: ${res.error})`);
+    } else {
+      showSyncFeedback('saved', 'Profil pegawai dipadam terus di Supabase');
+    }
   };
 
   return (
@@ -241,14 +249,31 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
                 Barisan Pegawai Unit Pendidikan Islam PPD Penampang
               </h1>
               {isSupabaseConnected && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] font-bold">
+                <span
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg border text-[11px] font-bold ${
+                    realtimeStatus === 'SUBSCRIBED'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                      : 'bg-blue-50 border-blue-200 text-blue-700'
+                  }`}
+                >
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      realtimeStatus === 'SUBSCRIBED'
+                        ? 'bg-emerald-500 animate-pulse'
+                        : 'bg-blue-500'
+                    }`}
+                  />
                   <Database className="w-3 h-3" />
-                  <span>Live Supabase: upi_officers</span>
+                  <span>
+                    {realtimeStatus === 'SUBSCRIBED'
+                      ? 'Live Realtime Supabase: upi_officers'
+                      : 'Terhubung Supabase: upi_officers'}
+                  </span>
                 </span>
               )}
             </div>
             <p className="text-xs sm:text-sm text-slate-500">
-              Direktori kepimpinan, carta organisasi, dan senarai pegawai. Sebarang suntingan di portal atau Table Editor Supabase dikemas kini serta-merta.
+              Direktori kepimpinan dipaparkan terus daripada jadual <span className="font-mono font-semibold text-slate-700">upi_officers</span> Supabase. Sebarang kemas kini di portal atau Supabase Table Editor disegerakkan secara langsung.
             </p>
           </div>
 
@@ -294,13 +319,18 @@ export const PegawaiPage: React.FC<PegawaiPageProps> = ({
         {/* Status Bar Serta-Merta */}
         {(syncState !== 'idle' || isQuickEditMode || isSupabaseConnected) && (
           <div className="mt-4 pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
-            <div className="flex items-center gap-2 text-slate-600">
+            <div className="flex flex-wrap items-center gap-2 text-slate-600">
               <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0" />
               <span>
                 {isQuickEditMode
-                  ? 'Mod Sunting Serta-Merta aktif: Ubah terus mana-mana maklumat di kad — disimpan automatik tanpa perlu tekan butang lain.'
-                  : 'Auto-segerak aktif: Perubahan di jadual upi_officers Supabase atau di kad dikemas kini secara automatik.'}
+                  ? 'Mod Sunting Serta-Merta aktif: Ubah terus mana-mana maklumat di kad — disimpan automatik terus ke Supabase.'
+                  : 'Kemas kini terus daripada Supabase aktif: Perubahan di Table Editor atau di portal dipaparkan secara langsung.'}
               </span>
+              {lastSyncedAt && (
+                <span className="text-[11px] font-mono text-slate-400">
+                  (Segerak terakhir: {lastSyncedAt})
+                </span>
+              )}
             </div>
 
             {syncState !== 'idle' && (

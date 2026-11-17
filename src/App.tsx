@@ -58,6 +58,8 @@ export default function App() {
   const [sekolahFokusList, setSekolahFokusList] = useState<SekolahFokus[]>([]);
 
   const [supabaseConfig, setSupabaseConfig] = useState<SupabaseConfig>(supabaseService.getConfig());
+  const [officersSyncedAt, setOfficersSyncedAt] = useState<string>('');
+  const [officersRealtimeStatus, setOfficersRealtimeStatus] = useState<string>('CONNECTING');
   const [isLoading, setIsLoading] = useState(true);
 
   // Auto-Sync Google Sheets State
@@ -72,7 +74,7 @@ export default function App() {
     try {
       const [
         schs,
-        offs,
+        offsRes,
         tkws,
         tchs,
         docs,
@@ -83,7 +85,7 @@ export default function App() {
         fokus
       ] = await Promise.all([
         supabaseService.getSchools(),
-        supabaseService.getOfficers(),
+        supabaseService.getOfficersDirect(),
         supabaseService.getTakwim(),
         supabaseService.getTeachers(),
         supabaseService.getDocuments(),
@@ -94,7 +96,10 @@ export default function App() {
         supabaseService.getSekolahFokus()
       ]);
       setSchools(schs);
-      setOfficers(offs);
+      setOfficers(offsRes.officers);
+      if (offsRes.fromSupabase) {
+        setOfficersSyncedAt(offsRes.syncedAt);
+      }
       setTakwim(tkws);
       setTeachers(tchs);
       setDocuments(docs);
@@ -117,12 +122,15 @@ export default function App() {
 
   const refreshOfficers = useCallback(async () => {
     try {
-      const freshOfficers = await supabaseService.getOfficers();
+      const res = await supabaseService.getOfficersDirect();
+      if (res.fromSupabase) {
+        setOfficersSyncedAt(res.syncedAt);
+      }
       setOfficers((prev) => {
-        if (JSON.stringify(prev) === JSON.stringify(freshOfficers)) {
+        if (JSON.stringify(prev) === JSON.stringify(res.officers)) {
           return prev;
         }
-        return freshOfficers;
+        return res.officers;
       });
     } catch (err) {
       console.warn('Auto-refresh officers failed:', err);
@@ -130,13 +138,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!supabaseConfig.isConnected) return;
+    if (!supabaseConfig.isConnected) {
+      setOfficersRealtimeStatus('OFFLINE');
+      return;
+    }
 
-    const unsubscribe = supabaseService.subscribeToOfficers((freshOfficers) => {
-      setOfficers((prev) =>
-        JSON.stringify(prev) === JSON.stringify(freshOfficers) ? prev : freshOfficers
-      );
-    });
+    const unsubscribe = supabaseService.subscribeToOfficers(
+      ({ officers: freshOfficers, syncedAt }) => {
+        setOfficersSyncedAt(syncedAt);
+        setOfficers((prev) =>
+          JSON.stringify(prev) === JSON.stringify(freshOfficers) ? prev : freshOfficers
+        );
+      },
+      (status) => {
+        setOfficersRealtimeStatus(status);
+      }
+    );
 
     const handleFocusOrVisible = () => {
       if (document.visibilityState === 'visible') {
@@ -147,7 +164,7 @@ export default function App() {
     window.addEventListener('focus', handleFocusOrVisible);
     document.addEventListener('visibilitychange', handleFocusOrVisible);
 
-    // Segerak latar pantas (setiap 6 saat) ketika di paparan Dashboard / Barisan Pegawai
+    // Segerak latar pantas (setiap 4 saat) ketika di paparan Dashboard / Barisan Pegawai
     const pollTimer = setInterval(() => {
       if (
         document.visibilityState === 'visible' &&
@@ -155,7 +172,7 @@ export default function App() {
       ) {
         refreshOfficers();
       }
-    }, 6000);
+    }, 4000);
 
     return () => {
       unsubscribe();
@@ -164,6 +181,13 @@ export default function App() {
       clearInterval(pollTimer);
     };
   }, [supabaseConfig.isConnected, currentPage, refreshOfficers]);
+
+  // Tarik data terkini terus dari Supabase setiap kali membuka Dashboard atau Barisan Pegawai
+  useEffect(() => {
+    if (supabaseConfig.isConnected && (currentPage === 'pegawai' || currentPage === 'dashboard')) {
+      refreshOfficers();
+    }
+  }, [currentPage, supabaseConfig.isConnected, refreshOfficers]);
 
   // Compute District Summary
   const summary: TasmikDistrictSummary = supabaseService.calculateDistrictSummary(schools);
@@ -319,18 +343,47 @@ export default function App() {
       return next.sort((a, b) => (a.order || 0) - (b.order || 0));
     });
     const res = await supabaseService.saveOfficer(officer);
+    if (res.syncedToCloud) {
+      setOfficersSyncedAt(
+        new Date().toLocaleTimeString('ms-MY', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      );
+    }
     return { syncedToCloud: res.syncedToCloud, error: res.error };
   };
 
   const handleSaveOfficersBatch = async (updatedOfficers: Officer[]): Promise<boolean> => {
     const sorted = [...updatedOfficers].sort((a, b) => (a.order || 0) - (b.order || 0));
     setOfficers(sorted);
-    return supabaseService.saveOfficersBatch(sorted);
+    const ok = await supabaseService.saveOfficersBatch(sorted);
+    if (ok) {
+      setOfficersSyncedAt(
+        new Date().toLocaleTimeString('ms-MY', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      );
+    }
+    return ok;
   };
 
-  const handleDeleteOfficer = async (id: string) => {
+  const handleDeleteOfficer = async (id: string): Promise<{ syncedToCloud: boolean; error?: string }> => {
     setOfficers((prev) => prev.filter((o) => o.id !== id));
-    await supabaseService.deleteOfficer(id);
+    const res = await supabaseService.deleteOfficer(id);
+    if (res.syncedToCloud) {
+      setOfficersSyncedAt(
+        new Date().toLocaleTimeString('ms-MY', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        })
+      );
+    }
+    return { syncedToCloud: res.syncedToCloud, error: res.error };
   };
 
   const handleSaveTakwim = async (event: TakwimEvent) => {
@@ -440,6 +493,10 @@ export default function App() {
                 modules={modules}
                 summary={summary}
                 onNavigate={handleNavigate}
+                isSupabaseConnected={supabaseConfig.isConnected}
+                officersRealtimeStatus={officersRealtimeStatus}
+                officersSyncedAt={officersSyncedAt}
+                onRefreshOfficers={refreshOfficers}
               />
             )}
 
@@ -487,6 +544,8 @@ export default function App() {
                 onDeleteOfficer={handleDeleteOfficer}
                 onRefreshOfficers={refreshOfficers}
                 isSupabaseConnected={supabaseConfig.isConnected}
+                realtimeStatus={officersRealtimeStatus}
+                lastSyncedAt={officersSyncedAt}
               />
             )}
 

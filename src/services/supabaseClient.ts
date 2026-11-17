@@ -326,64 +326,128 @@ class SupabaseService {
     };
   }
 
-  // --- OFFICERS CRUD ---
+  // --- OFFICERS CRUD (LANGSUNG DARI SUPABASE: upi_officers) ---
   public async getOfficers(): Promise<Officer[]> {
+    const res = await this.getOfficersDirect();
+    return res.officers;
+  }
+
+  public async getOfficersDirect(): Promise<{
+    officers: Officer[];
+    fromSupabase: boolean;
+    syncedAt: string;
+    error?: string;
+  }> {
+    const nowTime = new Date().toLocaleTimeString('ms-MY', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+
     if (this.client) {
       try {
         const { data, error } = await this.client
           .from('upi_officers')
           .select('*');
-        if (!error && data && data.length > 0) {
+        if (!error && Array.isArray(data)) {
           const sorted = (data as Officer[])
             .map((o) => this.normalizeOfficer(o))
             .sort((a, b) => (a.order || 0) - (b.order || 0));
           this.setLocal('officers', sorted);
-          return sorted;
+          return {
+            officers: sorted,
+            fromSupabase: true,
+            syncedAt: nowTime,
+          };
+        }
+        if (error) {
+          console.warn('Supabase getOfficersDirect error:', error.message);
+          this.ensureMasterVersionSync();
+          const fallback = this.getLocal<Officer[]>('officers', INITIAL_OFFICERS).map((o) =>
+            this.normalizeOfficer(o)
+          );
+          return {
+            officers: fallback,
+            fromSupabase: false,
+            syncedAt: nowTime,
+            error: error.message,
+          };
         }
       } catch (e) {
-        console.warn('Supabase getOfficers failed:', e);
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn('Supabase getOfficers failed:', msg);
+        this.ensureMasterVersionSync();
+        const fallback = this.getLocal<Officer[]>('officers', INITIAL_OFFICERS).map((o) =>
+          this.normalizeOfficer(o)
+        );
+        return {
+          officers: fallback,
+          fromSupabase: false,
+          syncedAt: nowTime,
+          error: msg,
+        };
       }
     }
+
     this.ensureMasterVersionSync();
-    return this.getLocal<Officer[]>('officers', INITIAL_OFFICERS).map((o) =>
-      this.normalizeOfficer(o)
-    );
+    return {
+      officers: this.getLocal<Officer[]>('officers', INITIAL_OFFICERS).map((o) =>
+        this.normalizeOfficer(o)
+      ),
+      fromSupabase: false,
+      syncedAt: nowTime,
+    };
   }
 
   public async saveOfficer(officer: Officer): Promise<{ officer: Officer; syncedToCloud: boolean; error?: string }> {
     const cleanOfficer = this.normalizeOfficer(officer);
+    let persisted = cleanOfficer;
+    let syncedToCloud = false;
+    let cloudError: string | undefined;
+
+    if (this.client) {
+      try {
+        const { data, error } = await this.client
+          .from('upi_officers')
+          .upsert(cleanOfficer)
+          .select()
+          .single();
+        if (error) {
+          console.warn('Supabase saveOfficer error:', error);
+          cloudError = error.message;
+        } else if (data) {
+          persisted = this.normalizeOfficer(data as Officer);
+          syncedToCloud = true;
+        } else {
+          syncedToCloud = true;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn('Supabase saveOfficer error:', e);
+        cloudError = msg;
+      }
+    }
+
     const localList = this.getLocal<Officer[]>('officers', INITIAL_OFFICERS);
-    const index = localList.findIndex(o => o.id === cleanOfficer.id);
+    const index = localList.findIndex(o => o.id === persisted.id);
     let updated: Officer[];
 
     if (index >= 0) {
       updated = [...localList];
-      updated[index] = cleanOfficer;
+      updated[index] = persisted;
     } else {
-      updated = [...localList, cleanOfficer];
+      updated = [...localList, persisted];
     }
     updated.sort((a, b) => (a.order || 0) - (b.order || 0));
     this.setLocal('officers', updated);
 
-    if (this.client) {
-      try {
-        const { error } = await this.client.from('upi_officers').upsert(cleanOfficer);
-        if (error) {
-          console.warn('Supabase saveOfficer error:', error);
-          return { officer: cleanOfficer, syncedToCloud: false, error: error.message };
-        }
-        return { officer: cleanOfficer, syncedToCloud: true };
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.warn('Supabase saveOfficer error:', e);
-        return { officer: cleanOfficer, syncedToCloud: false, error: msg };
-      }
-    }
-    return { officer: cleanOfficer, syncedToCloud: false };
+    return { officer: persisted, syncedToCloud, error: cloudError };
   }
 
   public async saveOfficersBatch(officers: Officer[]): Promise<boolean> {
-    const sorted = [...officers].sort((a, b) => (a.order || 0) - (b.order || 0));
+    const sorted = [...officers]
+      .map((o) => this.normalizeOfficer(o))
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
     this.setLocal('officers', sorted);
     if (this.client && sorted.length > 0) {
       try {
@@ -398,37 +462,59 @@ class SupabaseService {
         return false;
       }
     }
-    return true;
+    return !this.client;
   }
 
-  public async deleteOfficer(id: string): Promise<boolean> {
+  public async deleteOfficer(id: string): Promise<{ success: boolean; syncedToCloud: boolean; error?: string }> {
+    let syncedToCloud = false;
+    let cloudError: string | undefined;
+
+    if (this.client) {
+      try {
+        const { error } = await this.client.from('upi_officers').delete().eq('id', id);
+        if (error) {
+          console.warn('Supabase deleteOfficer error:', error);
+          cloudError = error.message;
+        } else {
+          syncedToCloud = true;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn('Supabase deleteOfficer error:', e);
+        cloudError = msg;
+      }
+    }
+
     const localList = this.getLocal<Officer[]>('officers', INITIAL_OFFICERS);
     const updated = localList.filter(o => o.id !== id);
     this.setLocal('officers', updated);
 
-    if (this.client) {
-      try {
-        await this.client.from('upi_officers').delete().eq('id', id);
-      } catch (e) {
-        console.warn('Supabase deleteOfficer error:', e);
-      }
-    }
-    return true;
+    return { success: !cloudError, syncedToCloud, error: cloudError };
   }
 
-  public subscribeToOfficers(onUpdate: (officers: Officer[]) => void): () => void {
-    if (!this.client) return () => {};
+  public subscribeToOfficers(
+    onUpdate: (result: { officers: Officer[]; syncedAt: string }) => void,
+    onStatusChange?: (status: string) => void
+  ): () => void {
+    if (!this.client) {
+      onStatusChange?.('OFFLINE');
+      return () => {};
+    }
     const channel = this.client
       .channel('upi_officers_realtime')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'upi_officers' },
         async () => {
-          const fresh = await this.getOfficers();
-          onUpdate(fresh);
+          const fresh = await this.getOfficersDirect();
+          if (fresh.fromSupabase) {
+            onUpdate({ officers: fresh.officers, syncedAt: fresh.syncedAt });
+          }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        onStatusChange?.(status);
+      });
 
     return () => {
       this.client?.removeChannel(channel);

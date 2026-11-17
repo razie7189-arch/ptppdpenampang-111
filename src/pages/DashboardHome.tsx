@@ -23,7 +23,8 @@ import {
   Sparkles,
   ChevronRight,
   BarChart2,
-  FileSpreadsheet
+  FileSpreadsheet,
+  RefreshCw
 } from 'lucide-react';
 
 interface DashboardHomeProps {
@@ -33,6 +34,10 @@ interface DashboardHomeProps {
   modules: DashboardModule[];
   summary: TasmikDistrictSummary;
   onNavigate: (page: PageId) => void;
+  isSupabaseConnected?: boolean;
+  officersRealtimeStatus?: string;
+  officersSyncedAt?: string;
+  onRefreshOfficers?: () => Promise<void>;
 }
 
 export const DashboardHome: React.FC<DashboardHomeProps> = ({
@@ -41,9 +46,21 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   takwim,
   modules,
   summary,
-  onNavigate
+  onNavigate,
+  isSupabaseConnected = false,
+  officersRealtimeStatus = 'CONNECTING',
+  officersSyncedAt = '',
+  onRefreshOfficers
 }) => {
   const [selectedChartTab, setSelectedChartTab] = useState<'khatam' | 'iqra' | 'juz'>('khatam');
+  const [isRefreshingOfficers, setIsRefreshingOfficers] = useState(false);
+
+  const handleRefreshOfficersClick = async () => {
+    if (!onRefreshOfficers || isRefreshingOfficers) return;
+    setIsRefreshingOfficers(true);
+    await onRefreshOfficers();
+    setIsRefreshingOfficers(false);
+  };
 
   // Top performing schools sorted by Khatam count
   const sortedSchools = [...schools].sort((a, b) => b.khatam - a.khatam);
@@ -52,8 +69,8 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
   // Upcoming 3 takwim events
   const upcomingEvents = takwim.slice(0, 3);
 
-  // Top 4 officers
-  const keyOfficers = officers.slice(0, 4);
+  // Papar kesemua barisan pegawai utama terus daripada Supabase
+  const keyOfficers = officers.slice(0, 6);
 
   return (
     <div className="space-y-8 pb-16">
@@ -516,24 +533,62 @@ export const DashboardHome: React.FC<DashboardHomeProps> = ({
 
           {/* Bento Card: Barisan Pegawai Unit Pendidikan Islam */}
           <div className="apple-card rounded-3xl p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center">
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-orange-100 text-orange-600 flex items-center justify-center shrink-0">
                   <Users className="w-4 h-4" />
                 </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">
-                    Barisan Pegawai UPI
-                  </h3>
-                  <p className="text-[11px] text-slate-500">PPD Penampang, Sabah</p>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="text-sm font-bold text-slate-900 truncate">
+                      Barisan Pegawai UPI
+                    </h3>
+                    {isSupabaseConnected && (
+                      <span
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold shrink-0 ${
+                          officersRealtimeStatus === 'SUBSCRIBED'
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-blue-50 text-blue-700 border border-blue-200'
+                        }`}
+                        title="Data disegerakkan terus daripada jadual upi_officers Supabase"
+                      >
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${
+                            officersRealtimeStatus === 'SUBSCRIBED'
+                              ? 'bg-emerald-500 animate-pulse'
+                              : 'bg-blue-500'
+                          }`}
+                        />
+                        <span>Live</span>
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 truncate">
+                    {isSupabaseConnected
+                      ? `Supabase upi_officers${officersSyncedAt ? ` • ${officersSyncedAt}` : ''}`
+                      : 'PPD Penampang, Sabah'}
+                  </p>
                 </div>
               </div>
-              <button
-                onClick={() => onNavigate('pegawai')}
-                className="text-xs font-semibold text-orange-600 hover:text-orange-700 cursor-pointer"
-              >
-                Direktori
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {isSupabaseConnected && onRefreshOfficers && (
+                  <button
+                    type="button"
+                    onClick={handleRefreshOfficersClick}
+                    disabled={isRefreshingOfficers}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-orange-600 hover:bg-orange-50 transition-colors cursor-pointer disabled:opacity-50"
+                    title="Kemas kini terus daripada Supabase"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingOfficers ? 'animate-spin' : ''}`} />
+                  </button>
+                )}
+                <button
+                  onClick={() => onNavigate('pegawai')}
+                  className="text-xs font-semibold text-orange-600 hover:text-orange-700 cursor-pointer"
+                >
+                  Direktori
+                </button>
+              </div>
             </div>
 
             <div className="space-y-3">

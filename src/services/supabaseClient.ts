@@ -193,11 +193,18 @@ class SupabaseService {
         const { data, error } = await this.client
           .from('tasmik_records')
           .select('*')
-          .order('schoolName', { ascending: true });
+          .order('schoolCode', { ascending: true });
         if (!error && data && data.length > 0) {
-          return (data as TasmikSchoolRecord[]).filter(
-            (s) => s.id !== 'keseluruhan-daerah' && s.schoolCode !== 'keseluruhan-daerah'
-          );
+          const masterMap = new Map(INITIAL_SCHOOLS.map((m) => [m.schoolCode, m]));
+          return (data as TasmikSchoolRecord[])
+            .filter((s) => s.id !== 'keseluruhan-daerah' && s.schoolCode !== 'keseluruhan-daerah')
+            .map((s) => {
+              const master = masterMap.get(s.schoolCode);
+              if ((!s.classBreakdown || s.classBreakdown.length === 0) && master?.classBreakdown) {
+                return { ...s, classBreakdown: master.classBreakdown };
+              }
+              return s;
+            });
         }
       } catch (e) {
         console.warn('Supabase getSchools failed, falling back to local data:', e);
